@@ -26,7 +26,6 @@ class CompleteAccountMigration
   end
 
   def export_complete_account(account_id, options = {})
-  def export_complete_account(account_id, options = {})
     puts "🏢 Iniciando exportación completa de cuenta ID: #{account_id}"
     
     @account = Account.find(account_id)
@@ -62,7 +61,7 @@ class CompleteAccountMigration
         total_conversations: conversations.count,
         total_contacts: @account.contacts.count,
         total_inboxes: @account.inboxes.count,
-        chatwoot_version: (Chatwoot.config[:version] rescue "unknown")
+        chatwoot_version: Chatwoot.config[:version] rescue "unknown"
       }
     }
 
@@ -923,228 +922,6 @@ class CompleteAccountImport
     puts "="*60
   end
 end
-      user.assign_attributes(
-        name: user_data['name'],
-        display_name: user_data['display_name'],
-        message_signature: user_data['message_signature'],
-        ui_settings: user_data['ui_settings'] || {},
-        custom_attributes: user_data['custom_attributes'] || {},
-        password: SecureRandom.hex(10)
-      )
-      user.skip_confirmation!
-    end
-
-    # Crear AccountUser
-    AccountUser.find_or_create_by(user: @target_user, account: @target_account) do |au|
-      au.assign_attributes(
-        role: user_data.dig('account_user', 'role') || 'agent',
-        availability: user_data.dig('account_user', 'availability') || 'online',
-        auto_offline: user_data.dig('account_user', 'auto_offline')
-      )
-    end
-
-    puts "✅ Usuario procesado: #{@target_user.email}"
-  #end
-
-  def import_contacts
-    puts "👥 Importando contactos..."
-    
-    @source_data['contacts'].each do |contact_data|
-      target_contact = @target_account.contacts.find_or_create_by(
-        email: contact_data['email']
-      ) do |contact|
-        contact.assign_attributes(
-          name: contact_data['name'],
-          phone_number: contact_data['phone_number'],
-          identifier: contact_data['identifier'],
-          additional_attributes: contact_data['additional_attributes'] || {},
-          custom_attributes: contact_data['custom_attributes'] || {}
-        )
-      end
-
-      @mapping[:contacts][contact_data['original_id']] = target_contact.id
-      @import_stats[:contacts_created] += 1 if target_contact.previously_new_record?
-    end
-
-    puts "✅ Contactos procesados: #{@mapping[:contacts].length}"
-  end
-
-  def map_inboxes
-    puts "📬 Mapeando inboxes..."
-    
-    @source_data['inboxes'].each do |inbox_data|
-      # Buscar inbox compatible en cuenta destino
-      target_inbox = find_compatible_inbox(inbox_data)
-      
-      if target_inbox
-        @mapping[:inboxes][inbox_data['original_id']] = target_inbox.id
-        puts "✅ Inbox mapeado: #{inbox_data['name']} -> #{target_inbox.name}"
-        @import_stats[:inboxes_mapped] += 1
-      else
-        puts "⚠️ Inbox no encontrado: #{inbox_data['name']} (#{inbox_data['channel_type']})"
-        puts "   Configura manualmente un inbox compatible en la cuenta destino"
-        @import_stats[:errors] << "Inbox no mapeado: #{inbox_data['name']}"
-      end
-    end
-  end
-
-  def find_compatible_inbox(inbox_data)
-    # Buscar inbox del mismo tipo
-    @target_account.inboxes.find_by(channel_type: inbox_data['channel_type']) ||
-    # Buscar por nombre similar
-    @target_account.inboxes.where("name ILIKE ?", "%#{inbox_data['name']}%").first ||
-    # Usar el primer inbox disponible como fallback
-    @target_account.inboxes.first
-  end
-
-  def import_labels
-    puts "🏷️ Importando labels..."
-    
-    @source_data['labels'].each do |label_data|
-      target_label = @target_account.labels.find_or_create_by(
-        title: label_data['title']
-      ) do |label|
-        label.assign_attributes(
-          description: label_data['description'],
-          color: label_data['color'],
-          show_on_sidebar: label_data['show_on_sidebar']
-        )
-      end
-
-      @mapping[:labels][label_data['title']] = target_label.id
-      @import_stats[:labels_created] += 1 if target_label.previously_new_record?
-    end
-
-    puts "✅ Labels procesados: #{@mapping[:labels].length}"
-  end
-
-  def import_conversations
-    puts "💬 Importando conversaciones..."
-    
-    @source_data['conversations'].each_with_index do |conv_data, index|
-      puts "📝 Conversación #{index + 1}/#{@source_data['conversations'].length}"
-      
-      # Verificar que tengamos mapeos necesarios
-      target_contact_id = @mapping[:contacts][conv_data['original_contact_id']]
-      target_inbox_id = @mapping[:inboxes][conv_data['original_inbox_id']]
-      
-      unless target_contact_id && target_inbox_id
-        puts "⚠️ Saltando conversación - falta mapeo (contacto: #{target_contact_id}, inbox: #{target_inbox_id})"
-        @import_stats[:errors] << "Conversación #{conv_data['display_id']} - mapeo incompleto"
-        next
-      end
-
-      # Crear conversación
-      target_conversation = create_conversation(conv_data, target_contact_id, target_inbox_id)
-      
-      if target_conversation
-        @mapping[:conversations][conv_data['original_id']] = target_conversation.id
-        @import_stats[:conversations_created] += 1
-        
-        # Importar mensajes
-        import_conversation_messages(target_conversation, conv_data['messages'])
-        
-        # Aplicar labels
-        apply_conversation_labels(target_conversation, conv_data['label_names'])
-      end
-    end
-  end
-
-  def create_conversation(conv_data, contact_id, inbox_id)
-    contact = Contact.find(contact_id)
-    inbox = Inbox.find(inbox_id)
-    
-    # Buscar o crear ContactInbox
-    contact_inbox = ContactInbox.find_or_create_by(
-      contact: contact,
-      inbox: inbox
-    ) do |ci|
-      ci.source_id = SecureRandom.uuid
-    end
-
-    # Crear conversación
-    conversation = @target_account.conversations.create!(
-      contact: contact,
-      inbox: inbox,
-      contact_inbox: contact_inbox,
-      assignee: @target_user,
-      status: conv_data['status'],
-      priority: conv_data['priority'],
-      additional_attributes: conv_data['additional_attributes'] || {},
-      custom_attributes: conv_data['custom_attributes'] || {},
-      identifier: conv_data['identifier']
-    )
-
-    puts "✅ Conversación creada: ##{conversation.display_id}"
-    conversation
-  rescue => e
-    puts "❌ Error creando conversación: #{e.message}"
-    @import_stats[:errors] << "Error conversación #{conv_data['display_id']}: #{e.message}"
-    nil
-  end
-
-  def import_conversation_messages(conversation, messages_data)
-    messages_data.each do |msg_data|
-      # Determinar sender
-      sender = determine_message_sender(msg_data)
-      
-      message = conversation.messages.create!(
-        account: @target_account,
-        inbox: conversation.inbox,
-        sender: sender,
-        content: msg_data['content'],
-        message_type: msg_data['message_type'],
-        private: msg_data['private'],
-        content_type: msg_data['content_type'],
-        content_attributes: msg_data['content_attributes'] || {},
-        created_at: msg_data['created_at']
-      )
-
-      @import_stats[:messages_created] += 1
-    end
-  rescue => e
-    puts "⚠️ Error importando mensajes: #{e.message}"
-    @import_stats[:errors] << "Error mensajes conversación #{conversation.display_id}: #{e.message}"
-  end
-
-  def determine_message_sender(msg_data)
-    case msg_data['sender_type']
-    when 'User'
-      @target_user
-    when 'Contact'
-      # Buscar contacto por email o usar el de la conversación
-      Contact.find_by(email: msg_data['sender_email']) || conversation.contact
-    else
-      nil
-    end
-  end
-
-  def apply_conversation_labels(conversation, label_names)
-    return if label_names.blank?
-    
-    label_ids = label_names.map { |name| @mapping[:labels][name] }.compact
-    conversation.label_ids = label_ids if label_ids.any?
-  rescue => e
-    puts "⚠️ Error aplicando labels: #{e.message}"
-  end
-
-  def show_import_summary
-    puts "\n🎉 IMPORTACIÓN COMPLETADA"
-    puts "=" * 50
-    puts "📊 Estadísticas:"
-    puts "   - Contactos creados: #{@import_stats[:contacts_created]}"
-    puts "   - Inboxes mapeados: #{@import_stats[:inboxes_mapped]}"
-    puts "   - Labels creados: #{@import_stats[:labels_created]}"
-    puts "   - Conversaciones creadas: #{@import_stats[:conversations_created]}"
-    puts "   - Mensajes creados: #{@import_stats[:messages_created]}"
-    
-    if @import_stats[:errors].any?
-      puts "\n⚠️ Errores encontrados:"
-      @import_stats[:errors].first(10).each { |error| puts "   - #{error}" }
-      puts "   ... y #{@import_stats[:errors].count - 10} más" if @import_stats[:errors].count > 10
-    end
-  end
-#end
 
 # =============================================================================
 # EJEMPLOS DE USO - MIGRACIÓN POR CUENTA/EMPRESA
@@ -1214,7 +991,6 @@ end
 # # Verificar conversación específica
 # conv = account.conversations.first
 # puts "Conversación ##{conv.display_id}: #{conv.messages.count} mensajes"
-
 # =============================================================================
 # NOTAS IMPORTANTES
 # =============================================================================
@@ -1228,3 +1004,4 @@ end
 # 6. La cuenta destino se puede crear nueva o usar existente
 # 7. Los usuarios mantienen sus roles y configuraciones
 # 8. Se respetan los timestamps originales de creación
+
