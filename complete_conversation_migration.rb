@@ -944,7 +944,7 @@ end
     end
 
     puts "✅ Usuario procesado: #{@target_user.email}"
-  end
+  #end
 
   def import_contacts
     puts "👥 Importando contactos..."
@@ -1144,7 +1144,7 @@ end
       puts "   ... y #{@import_stats[:errors].count - 10} más" if @import_stats[:errors].count > 10
     end
   end
-end
+#end
 
 # =============================================================================
 # EJEMPLOS DE USO - MIGRACIÓN POR CUENTA/EMPRESA
