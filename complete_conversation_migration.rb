@@ -62,7 +62,7 @@ class CompleteAccountMigration
         total_conversations: conversations.count,
         total_contacts: @account.contacts.count,
         total_inboxes: @account.inboxes.count,
-        chatwoot_version: Chatwoot.config[:version] rescue "unknown"
+        chatwoot_version: (Chatwoot.config[:version] rescue "unknown")
       }
     }
 
